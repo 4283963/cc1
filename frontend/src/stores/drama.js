@@ -18,12 +18,18 @@ export const useDramaStore = defineStore('drama', {
     lastSelectedNodeId: null,
     lastBranchSelectTime: 0,
     lastOptionsFetchKey: null,
+    personality: null,
+    danmakuList: [],
+    battleReport: null,
+    isLoadingReport: false,
   }),
 
   getters: {
     hasOptions: (state) => state.branchOptions && state.branchOptions.length > 0,
     isEnding: (state) => state.currentNode?.is_ending || false,
     canSelectBranch: (state) => !state.isSelectingBranch && !state.isLoading,
+    danmakuColor: (state) => state.personality?.dominant_color || '#ffffff',
+    dominantTrait: (state) => state.personality?.dominant_trait || null,
   },
 
   actions: {
@@ -235,6 +241,89 @@ export const useDramaStore = defineStore('drama', {
       this.preloadedVideos.clear()
     },
 
+    async fetchPersonality() {
+      try {
+        const res = await dramaApi.getUserPersonality(this.userId, this.seriesId)
+        if (res.code === 0) {
+          this.personality = res.data
+        }
+        return res.data
+      } catch (err) {
+        if (err.isCancel || err.isDebounced) return null
+        console.error('获取性格画像失败:', err)
+        return null
+      }
+    },
+
+    async sendDanmaku(content, videoTime = 0) {
+      if (!content || !content.trim()) return null
+      
+      try {
+        const res = await dramaApi.sendDanmaku({
+          user_id: this.userId,
+          series_id: this.seriesId,
+          node_id: this.currentNodeId,
+          content: content.trim(),
+          video_time: Math.floor(videoTime),
+        })
+        if (res.code === 0) {
+          if (res.data.personality_info) {
+            this.personality = res.data.personality_info
+          }
+          this.danmakuList.push(res.data)
+          return res.data
+        }
+        return null
+      } catch (err) {
+        if (err.isCancel || err.isDebounced) return null
+        console.error('发送弹幕失败:', err)
+        return null
+      }
+    },
+
+    async fetchDanmakuList(nodeId) {
+      try {
+        const targetNodeId = nodeId || this.currentNodeId
+        if (!targetNodeId) return []
+        
+        const res = await dramaApi.getDanmakuList(targetNodeId)
+        if (res.code === 0) {
+          this.danmakuList = res.data || []
+        }
+        return this.danmakuList
+      } catch (err) {
+        if (err.isCancel || err.isDebounced) return []
+        console.error('获取弹幕列表失败:', err)
+        return []
+      }
+    },
+
+    addLocalDanmaku(danmaku) {
+      this.danmakuList.push(danmaku)
+    },
+
+    async fetchBattleReport() {
+      this.isLoadingReport = true
+      try {
+        const res = await dramaApi.getBattleReport(this.userId, this.seriesId)
+        if (res.code === 0) {
+          this.battleReport = res.data
+        }
+        return res.data
+      } catch (err) {
+        if (err.isCancel || err.isDebounced) return null
+        console.error('获取战报失败:', err)
+        throw err
+      } finally {
+        this.isLoadingReport = false
+      }
+    },
+
+    clearBattleReport() {
+      this.battleReport = null
+      this.isLoadingReport = false
+    },
+
     resetAllState() {
       cancelAllPendingRequests()
       this.clearPreloadedVideos()
@@ -243,6 +332,10 @@ export const useDramaStore = defineStore('drama', {
       this.lastBranchSelectTime = 0
       this.branchOptions = []
       this.lastOptionsFetchKey = null
+      this.personality = null
+      this.danmakuList = []
+      this.battleReport = null
+      this.isLoadingReport = false
     },
   },
 })

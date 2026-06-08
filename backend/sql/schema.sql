@@ -98,3 +98,54 @@ CREATE TABLE video_timestamps (
   INDEX idx_node (node_id),
   FOREIGN KEY (node_id) REFERENCES drama_nodes(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='视频埋点表';
+
+-- 剧情分支表增加性格标签字段
+ALTER TABLE drama_edges ADD COLUMN IF NOT EXISTS personality_tags VARCHAR(500) DEFAULT NULL COMMENT '性格标签(JSON数组, ["brave","violent"])';
+
+-- 性格标签定义表
+DROP TABLE IF EXISTS personality_traits;
+CREATE TABLE personality_traits (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  trait_key VARCHAR(50) NOT NULL UNIQUE COMMENT '性格键值: brave/cowardly/violent/peaceful...',
+  trait_name VARCHAR(50) NOT NULL COMMENT '性格名称: 勇敢/胆小/暴躁/温和...',
+  color VARCHAR(20) NOT NULL DEFAULT '#667eea' COMMENT '弹幕颜色',
+  opposite_trait VARCHAR(50) DEFAULT NULL COMMENT '对立性格',
+  description VARCHAR(255) DEFAULT NULL COMMENT '性格描述',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='性格标签定义表';
+
+-- 用户性格画像表
+DROP TABLE IF EXISTS user_personality;
+CREATE TABLE user_personality (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  user_id VARCHAR(100) NOT NULL COMMENT '用户ID',
+  series_id INT NOT NULL COMMENT '剧集ID',
+  trait_scores TEXT COMMENT '各性格维度分数(JSON)',
+  dominant_trait VARCHAR(50) DEFAULT NULL COMMENT '主导性格',
+  dominant_color VARCHAR(20) DEFAULT NULL COMMENT '主导性格颜色',
+  total_choices INT DEFAULT 0 COMMENT '总选择次数',
+  last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_user_series (user_id, series_id),
+  INDEX idx_dominant (dominant_trait),
+  FOREIGN KEY (series_id) REFERENCES drama_series(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户性格画像表';
+
+-- 弹幕表
+DROP TABLE IF EXISTS danmaku;
+CREATE TABLE danmaku (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  user_id VARCHAR(100) NOT NULL COMMENT '发送用户ID',
+  series_id INT NOT NULL COMMENT '剧集ID',
+  node_id INT NOT NULL COMMENT '节点ID',
+  content VARCHAR(200) NOT NULL COMMENT '弹幕内容',
+  color VARCHAR(20) DEFAULT '#ffffff' COMMENT '弹幕颜色',
+  video_time INT DEFAULT 0 COMMENT '发送时的视频时间点(秒)',
+  personality_trait VARCHAR(50) DEFAULT NULL COMMENT '用户当时的性格标签',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_node (node_id),
+  INDEX idx_user (user_id),
+  INDEX idx_created (created_at),
+  FOREIGN KEY (series_id) REFERENCES drama_series(id) ON DELETE CASCADE,
+  FOREIGN KEY (node_id) REFERENCES drama_nodes(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='弹幕表';

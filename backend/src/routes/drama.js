@@ -29,6 +29,22 @@ const watchRateLimit = rateLimitMiddleware({
   },
 });
 
+const danmakuRateLimit = rateLimitMiddleware({
+  limit: 30,
+  window: 60000,
+  keyGenerator: (req) => {
+    return `danmaku:${req.body?.user_id || req.ip}`;
+  },
+});
+
+const reportRateLimit = rateLimitMiddleware({
+  limit: 5,
+  window: 60000,
+  keyGenerator: (req) => {
+    return `report:${req.query?.user_id || req.ip}`;
+  },
+});
+
 router.get('/series', DramaController.listSeries);
 router.get('/series/:id', DramaController.getSeriesDetail);
 router.get('/series/:id/tree', DramaController.getDramaTree);
@@ -68,5 +84,21 @@ router.post(
 
 router.get('/history', DramaController.getUserHistory);
 router.get('/continue', DramaController.continueWatching);
+
+router.get('/personality/traits', DramaController.getTraitList);
+router.get('/personality', DramaController.getUserPersonality);
+
+router.get('/danmaku', DramaController.getDanmakuList);
+router.post(
+  '/danmaku',
+  danmakuRateLimit,
+  debounceRequest(
+    (req) => `danmaku:${req.body?.user_id}:${req.body?.node_id}:${req.body?.content}`,
+    500
+  ),
+  DramaController.sendDanmaku
+);
+
+router.get('/report', reportRateLimit, DramaController.getBattleReport);
 
 module.exports = router;

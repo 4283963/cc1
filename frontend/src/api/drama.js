@@ -120,6 +120,40 @@ export const dramaApi = {
       params: { user_id: userId, series_id: seriesId },
     })
   },
+
+  getUserPersonality(userId, seriesId) {
+    return request.get('/personality', {
+      params: { user_id: userId, series_id: seriesId },
+    })
+  },
+
+  getTraitList() {
+    return request.get('/personality/traits')
+  },
+
+  sendDanmaku(params) {
+    const key = `danmaku_${params.user_id}_${params.node_id}_${params.content}`
+    if (!debounceRequest(key, 300)) {
+      return Promise.reject({ isDebounced: true, message: '发弹幕太频繁啦' })
+    }
+    return request.post('/danmaku', params)
+  },
+
+  getDanmakuList(nodeId, limit = 200) {
+    return request.get('/danmaku', {
+      params: { node_id: nodeId, limit },
+    })
+  },
+
+  getBattleReport(userId, seriesId) {
+    const key = `report_${userId}_${seriesId}`
+    if (!debounceRequest(key, 2000)) {
+      return Promise.reject({ isDebounced: true, message: '请求战报太频繁' })
+    }
+    return request.get('/report', {
+      params: { user_id: userId, series_id: seriesId },
+    })
+  },
 }
 
 export function cancelAllPendingRequests() {

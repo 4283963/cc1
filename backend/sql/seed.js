@@ -79,24 +79,65 @@ async function seed() {
 
     await pool.query('UPDATE drama_series SET root_node_id = 1 WHERE id = ?', [seriesId]);
 
+    const personalityTraits = [
+      { key: 'brave', name: '勇敢', color: '#ff6b6b', opposite: 'cowardly', desc: '敢于面对危险，勇往直前' },
+      { key: 'cowardly', name: '胆小', color: '#74b9ff', opposite: 'brave', desc: '谨慎小心，不轻易冒险' },
+      { key: 'violent', name: '暴躁', color: '#ff4757', opposite: 'peaceful', desc: '遇事冲动，喜欢用武力解决' },
+      { key: 'peaceful', name: '温和', color: '#2ed573', opposite: 'violent', desc: '性格平和，追求和谐' },
+      { key: 'smart', name: '机智', color: '#ffa502', opposite: 'reckless', desc: '聪明伶俐，善于思考' },
+      { key: 'reckless', name: '鲁莽', color: '#ff6348', opposite: 'smart', desc: '做事不计后果，横冲直撞' },
+      { key: 'cautious', name: '谨慎', color: '#70a1ff', opposite: 'curious', desc: '小心谨慎，三思而后行' },
+      { key: 'curious', name: '好奇', color: '#eccc68', opposite: 'cautious', desc: '充满好奇心，喜欢探索未知' },
+    ];
+
+    for (const trait of personalityTraits) {
+      await pool.query(
+        `INSERT INTO personality_traits (trait_key, trait_name, color, opposite_trait, description) 
+         VALUES (?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE trait_name=VALUES(trait_name), color=VALUES(color), 
+         opposite_trait=VALUES(opposite_trait), description=VALUES(description)`,
+        [trait.key, trait.name, trait.color, trait.opposite, trait.desc]
+      );
+    }
+    console.log(`🎭 植入了 ${personalityTraits.length} 个性格标签`);
+
     const edges = [
-      { from: 1, to: 2, text: '继续探索', label: 'A', trigger_time: 30, weight: 10, sort: 1 },
-      { from: 2, to: 3, text: '开门', label: 'A', trigger_time: 45, weight: 8, sort: 1 },
-      { from: 2, to: 4, text: '翻墙', label: 'B', trigger_time: 45, weight: 6, sort: 2 },
-      { from: 3, to: 5, text: '进入密室', label: 'A', trigger_time: 25, weight: 5, sort: 1 },
-      { from: 3, to: 8, text: '触发陷阱', label: 'B', trigger_time: 25, weight: 2, sort: 2 },
-      { from: 4, to: 6, text: '进入花园', label: 'A', trigger_time: 25, weight: 7, sort: 1 },
-      { from: 5, to: 7, text: '找到钥匙', label: 'A', trigger_time: 35, weight: 4, sort: 1 },
-      { from: 5, to: 8, text: '打开错误的门', label: 'B', trigger_time: 35, weight: 3, sort: 2 },
-      { from: 6, to: 9, text: '发现隐藏通道', label: 'A', trigger_time: 35, weight: 5, sort: 1 },
-      { from: 6, to: 7, text: '找到大门', label: 'B', trigger_time: 35, weight: 6, sort: 2 },
+      { from: 1, to: 2, text: '继续探索', label: 'A', trigger_time: 30, weight: 10, sort: 1, 
+        tags: ['curious', 'brave'] },
+      { from: 2, to: 3, text: '开门', label: 'A', trigger_time: 45, weight: 8, sort: 1, 
+        tags: ['brave', 'curious'] },
+      { from: 2, to: 4, text: '翻墙', label: 'B', trigger_time: 45, weight: 6, sort: 2, 
+        tags: ['reckless', 'brave'] },
+      { from: 3, to: 5, text: '进入密室', label: 'A', trigger_time: 25, weight: 5, sort: 1, 
+        tags: ['curious', 'smart'] },
+      { from: 3, to: 8, text: '触发陷阱', label: 'B', trigger_time: 25, weight: 2, sort: 2, 
+        tags: ['reckless', 'violent'] },
+      { from: 4, to: 6, text: '进入花园', label: 'A', trigger_time: 25, weight: 7, sort: 1, 
+        tags: ['peaceful', 'cautious'] },
+      { from: 5, to: 7, text: '找到钥匙', label: 'A', trigger_time: 35, weight: 4, sort: 1, 
+        tags: ['smart', 'cautious'] },
+      { from: 5, to: 8, text: '打开错误的门', label: 'B', trigger_time: 35, weight: 3, sort: 2, 
+        tags: ['reckless', 'curious'] },
+      { from: 6, to: 9, text: '发现隐藏通道', label: 'A', trigger_time: 35, weight: 5, sort: 1, 
+        tags: ['smart', 'curious'] },
+      { from: 6, to: 7, text: '找到大门', label: 'B', trigger_time: 35, weight: 6, sort: 2, 
+        tags: ['cautious', 'peaceful'] },
     ];
 
     for (const edge of edges) {
       await pool.query(
-        `INSERT INTO drama_edges (from_node_id, to_node_id, option_text, option_label, trigger_time, weight, sort_order) 
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [edge.from, edge.to, edge.text, edge.label, edge.trigger_time, edge.weight, edge.sort]
+        `INSERT INTO drama_edges (from_node_id, to_node_id, option_text, option_label, trigger_time, weight, sort_order, personality_tags) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          edge.from, 
+          edge.to, 
+          edge.text, 
+          edge.label, 
+          edge.trigger_time, 
+          edge.weight, 
+          edge.sort,
+          JSON.stringify(edge.tags)
+        ]
       );
     }
     console.log(`🔗 植入了 ${edges.length} 条剧情分支`);

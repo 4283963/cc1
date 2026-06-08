@@ -207,7 +207,7 @@ class DramaService {
     return result;
   }
 
-  static async recordUserChoice(userId, seriesId, nodeId, region = null, watchDuration = 0) {
+  static async recordUserChoice(userId, seriesId, nodeId, region = null, watchDuration = 0, fromNodeId = null, edgeId = null) {
     const watchKey = `${userId}:${seriesId}:${nodeId}`;
     
     if (pendingWrites.userWatches.has(watchKey)) {
@@ -244,6 +244,13 @@ class DramaService {
     const historyId = await UserWatchHistory.recordWatch(
       userId, seriesId, nodeId, userRegion, watchDuration
     );
+    
+    if (fromNodeId) {
+      const PersonalityService = require('./personalityService');
+      PersonalityService.recordChoice(userId, seriesId, edgeId, fromNodeId, nodeId).catch(err => {
+        console.warn('[DramaService] 更新性格画像失败:', err.message);
+      });
+    }
     
     return {
       history_id: historyId,

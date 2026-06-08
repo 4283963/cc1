@@ -6,30 +6,53 @@
         <span class="app-subtitle">选择你的剧情走向</span>
       </div>
       <div class="header-right">
-        <div class="user-info">
-          <span class="user-label">用户ID:</span>
-          <span class="user-id">{{ dramaStore.userId.slice(0, 15) }}...</span>
+        <div class="personality-badge" v-if="dramaStore.personality?.dominant_trait">
+          <span class="p-color" :style="{ background: dramaStore.danmakuColor }"></span>
+          <span class="p-name">{{ dominantTraitName }}</span>
         </div>
         <div class="region-badge" v-if="dramaStore.region">
           <span class="region-dot"></span>
           {{ dramaStore.region }} CDN
+        </div>
+        <div class="user-info">
+          <span class="user-id">{{ dramaStore.userId.slice(0, 10) }}...</span>
         </div>
       </div>
     </header>
 
     <main class="page-main">
       <div class="player-section">
-        <DramaPlayer
-          ref="playerRef"
-          :video-url="currentVideoUrl"
-          :current-node="dramaStore.currentNode"
-          :timestamps="nodeTimestamps"
-          :is-loading="dramaStore.isLoading"
-          @time-update="onTimeUpdate"
-          @branch-trigger="onBranchTrigger"
-          @select-branch="onSelectBranch"
-          @restart="restartDrama"
-        />
+        <div class="player-wrapper">
+          <DramaPlayer
+            ref="playerRef"
+            :video-url="currentVideoUrl"
+            :current-node="dramaStore.currentNode"
+            :timestamps="nodeTimestamps"
+            :is-loading="dramaStore.isLoading"
+            @time-update="onTimeUpdate"
+            @branch-trigger="onBranchTrigger"
+            @select-branch="onSelectBranch"
+            @restart="restartDrama"
+          />
+          
+          <div class="danmaku-overlay">
+            <DramaDanmaku
+              ref="danmakuRef"
+              :danmaku-list="dramaStore.danmakuList"
+              :current-time="currentTime"
+              :show-input="showDanmakuInput"
+              :auto-play="true"
+              @send="onDanmakuSend"
+            />
+          </div>
+
+          <button 
+            class="danmaku-toggle-btn" 
+            @click="showDanmakuInput = !showDanmakuInput"
+          >
+            {{ showDanmakuInput ? '隐藏弹幕' : '显示弹幕' }}
+          </button>
+        </div>
 
         <div class="info-cards">
           <div class="info-card">
@@ -40,15 +63,36 @@
             </div>
           </div>
 
-          <div class="info-card" v-if="cdnInfo.length > 0">
-            <div class="info-card-title">CDN 缓存状态</div>
-            <div class="cdn-list">
-              <div v-for="info in cdnInfo" :key="info.to_node_id" class="cdn-item">
-                <span class="cdn-name">{{ info.option_text }}</span>
-                <span class="cdn-status" :class="{ cached: info.cdn_info?.is_cached }">
-                  {{ info.cdn_info?.is_cached ? '已缓存' : '未缓存' }}
+          <div class="info-card">
+            <div class="info-card-title">我的性格画像</div>
+            <div class="personality-info" v-if="dramaStore.personality && dramaStore.personality.traits?.length">
+              <div class="personality-dominant">
+                <span class="p-label">主导</span>
+                <span class="p-value" :style="{ color: dramaStore.danmakuColor }">
+                  {{ dominantTraitName }}
                 </span>
               </div>
+              <div class="personality-bars">
+                <div 
+                  v-for="trait in dramaStore.personality.traits.slice(0, 3)" 
+                  :key="trait.trait_key"
+                  class="p-bar-row"
+                >
+                  <span class="p-bar-name">{{ trait.trait_name }}</span>
+                  <div class="p-bar-bg">
+                    <div 
+                      class="p-bar-fill" 
+                      :style="{ 
+                        width: (trait.score / maxTraitScore * 100) + '%',
+                        background: trait.color 
+                      }"
+                    ></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="no-personality" v-else>
+              <p>多做几个选择，系统会生成你的专属性格画像~</p>
             </div>
           </div>
         </div>
@@ -64,6 +108,13 @@
       </div>
     </main>
 
+    <BattleReport
+      v-if="showBattleReport && dramaStore.battleReport"
+      :report="dramaStore.battleReport"
+      :visible="showBattleReport"
+      @close="showBattleReport = false"
+    />
+
     <div class="loading-init" v-if="isInitializing">
       <div class="loading-spinner"></div>
       <p>正在加载剧情...</p>
@@ -77,24 +128,44 @@ import { useDramaStore } from './stores/drama'
 import { dramaApi } from './api/drama'
 import DramaPlayer from './components/DramaPlayer.vue'
 import DramaTree from './components/DramaTree.vue'
+import DramaDanmaku from './components/DramaDanmaku.vue'
+import BattleReport from './components/BattleReport.vue'
 
 const dramaStore = useDramaStore()
 
 const playerRef = ref(null)
+const danmakuRef = ref(null)
 const isInitializing = ref(true)
 const currentTime = ref(0)
 const nodeTimestamps = ref([45])
+const showDanmakuInput = ref(true)
+const showBattleReport = ref(false)
+const hasTriggeredEnding = ref(false)
+
+const traitNameMap = {
+  brave: '勇敢型',
+  cowardly: '苟活型',
+  violent: '暴躁型',
+  peaceful: '佛系型',
+  smart: '机智型',
+  reckless: '鲁莽型',
+  kind: '善良型',
+  cunning: '狡诈型',
+}
 
 const currentVideoUrl = computed(() => {
   return dramaStore.currentNode?.video_url || ''
 })
 
-const cdnInfo = computed(() => {
-  return dramaStore.branchOptions.map(opt => ({
-    to_node_id: opt.to_node_id,
-    option_text: opt.option_text,
-    cdn_info: opt.cdn_info,
-  }))
+const dominantTraitName = computed(() => {
+  const key = dramaStore.dominantTrait
+  return traitNameMap[key] || key || '未知'
+})
+
+const maxTraitScore = computed(() => {
+  const traits = dramaStore.personality?.traits || []
+  if (traits.length === 0) return 10
+  return Math.max(...traits.map(t => t.score || 0), 10)
 })
 
 async function initDrama() {
@@ -104,10 +175,12 @@ async function initDrama() {
       dramaStore.fetchContinueWatching(),
       dramaStore.fetchUserHistory(),
       dramaStore.fetchDramaTree(),
+      dramaStore.fetchPersonality(),
     ])
 
     if (dramaStore.currentNode) {
       await loadNodeDetail(dramaStore.currentNodeId)
+      await loadDanmakuList(dramaStore.currentNodeId)
     }
   } catch (err) {
     console.error('初始化失败:', err)
@@ -132,6 +205,11 @@ async function loadNodeDetail(nodeId) {
   }
 }
 
+async function loadDanmakuList(nodeId) {
+  if (!nodeId) return
+  await dramaStore.fetchDanmakuList(nodeId)
+}
+
 function onTimeUpdate(time) {
   currentTime.value = time
 }
@@ -141,8 +219,12 @@ function onBranchTrigger(timestamp) {
 }
 
 async function onSelectBranch(option) {
-  console.log('选择分支:', option)
+  hasTriggeredEnding.value = false
+  
   await loadNodeDetail(option.to_node_id)
+  await loadDanmakuList(option.to_node_id)
+  
+  await dramaStore.fetchPersonality()
 }
 
 async function onTreeNodeClick(node) {
@@ -154,20 +236,47 @@ async function onTreeNodeClick(node) {
       is_ending: node.is_ending,
     }
     dramaStore.currentNodeId = node.id
+    hasTriggeredEnding.value = false
+    
     await loadNodeDetail(node.id)
+    await loadDanmakuList(node.id)
   }
 }
 
+function onDanmakuSend(danmaku) {
+  console.log('弹幕已发送:', danmaku)
+}
+
+async function checkEndingAndGenerateReport() {
+  if (!dramaStore.currentNode?.is_ending || hasTriggeredEnding.value) return
+  
+  hasTriggeredEnding.value = true
+  
+  setTimeout(async () => {
+    try {
+      await dramaStore.fetchBattleReport()
+      if (dramaStore.battleReport) {
+        showBattleReport.value = true
+      }
+    } catch (err) {
+      console.error('生成战报失败:', err)
+    }
+  }, 2000)
+}
+
 async function restartDrama() {
+  showBattleReport.value = false
+  hasTriggeredEnding.value = false
+  dramaStore.clearBattleReport()
   dramaStore.clearPreloadedVideos()
   await initDrama()
 }
 
-watch(() => dramaStore.currentNodeId, (newId) => {
-  if (newId) {
-    loadNodeDetail(newId)
+watch(() => dramaStore.currentNode, (newNode) => {
+  if (newNode?.is_ending) {
+    checkEndingAndGenerateReport()
   }
-})
+}, { deep: true })
 
 onMounted(() => {
   initDrama()
@@ -179,6 +288,7 @@ onMounted(() => {
   min-height: 100vh;
   background: linear-gradient(135deg, #0f0f1a 0%, #1a1a2e 50%, #16213e 100%);
   padding: 20px;
+  position: relative;
 }
 
 .page-header {
@@ -212,26 +322,29 @@ onMounted(() => {
 .header-right {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
 }
 
-.user-info {
+.personality-badge {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 13px;
-  color: rgba(255, 255, 255, 0.7);
+  padding: 6px 12px;
   background: rgba(255, 255, 255, 0.08);
-  padding: 8px 12px;
   border-radius: 20px;
 }
 
-.user-label {
-  opacity: 0.7;
+.p-color {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  box-shadow: 0 0 6px currentColor;
 }
 
-.user-id {
-  font-family: monospace;
+.p-name {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.8);
+  font-weight: 500;
 }
 
 .region-badge {
@@ -241,7 +354,7 @@ onMounted(() => {
   font-size: 13px;
   color: #4caf50;
   background: rgba(76, 175, 80, 0.15);
-  padding: 8px 12px;
+  padding: 6px 12px;
   border-radius: 20px;
 }
 
@@ -256,6 +369,18 @@ onMounted(() => {
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
+}
+
+.user-info {
+  background: rgba(255, 255, 255, 0.08);
+  padding: 6px 12px;
+  border-radius: 20px;
+}
+
+.user-id {
+  font-family: monospace;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.7);
 }
 
 .page-main {
@@ -276,6 +401,40 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+.player-wrapper {
+  position: relative;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.danmaku-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.danmaku-toggle-btn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 6;
+  padding: 6px 14px;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 20px;
+  color: white;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.danmaku-toggle-btn:hover {
+  background: rgba(102, 126, 234, 0.4);
+  border-color: rgba(102, 126, 234, 0.6);
 }
 
 .info-cards {
@@ -315,37 +474,73 @@ onMounted(() => {
   line-height: 1.5;
 }
 
-.cdn-list {
+.personality-info {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.personality-dominant {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.p-label {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.08);
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.p-value {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.personality-bars {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
-.cdn-item {
+.p-bar-row {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  padding: 8px 12px;
-  background: rgba(0, 0, 0, 0.2);
-  border-radius: 6px;
-  font-size: 13px;
+  gap: 8px;
 }
 
-.cdn-name {
-  color: #fff;
-}
-
-.cdn-status {
+.p-bar-name {
   font-size: 12px;
-  color: #ff9800;
-  background: rgba(255, 152, 0, 0.15);
-  padding: 4px 8px;
-  border-radius: 10px;
+  color: rgba(255, 255, 255, 0.7);
+  width: 48px;
+  flex-shrink: 0;
 }
 
-.cdn-status.cached {
-  color: #4caf50;
-  background: rgba(76, 175, 80, 0.15);
+.p-bar-bg {
+  flex: 1;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.p-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.5s ease;
+}
+
+.no-personality {
+  text-align: center;
+  padding: 20px 0;
+}
+
+.no-personality p {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
+  line-height: 1.6;
 }
 
 .tree-section {
