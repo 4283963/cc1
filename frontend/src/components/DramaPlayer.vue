@@ -11,12 +11,14 @@
         @pause="onPause"
         @ended="onEnded"
         @seeking="onSeeking"
+        @error="onVideoError"
         playsinline
         webkit-playsinline
+        preload="auto"
       ></video>
 
       <div class="video-overlay" v-if="showControls || !isPlaying">
-        <div class="play-button" v-if="!isPlaying" @click="togglePlay">
+        <div class="play-button" v-if="!isPlaying && !showBranchOptions" @click="togglePlay">
           <svg viewBox="0 0 24 24" fill="currentColor">
             <path d="M8 5v14l11-7z"/>
           </svg>
@@ -41,7 +43,7 @@
 
         <div class="controls-row">
           <div class="controls-left">
-            <button class="ctrl-btn" @click="togglePlay">
+            <button class="ctrl-btn" @click="togglePlay" :disabled="isSwitching">
               <svg v-if="isPlaying" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>
               </svg>
@@ -78,8 +80,9 @@
               v-for="(option, index) in branchOptions"
               :key="option.id"
               class="branch-btn"
-              :class="'branch-' + (index + 1)"
-              @click="selectBranch(option)"
+              :class="['branch-' + (index + 1), { 'is-disabled': isSelectingBranch }]"
+              @click="handleSelectBranch(option)"
+              :disabled="isSelectingBranch"
             >
               <span class="option-label">{{ option.option_label || String.fromCharCode(65 + index) }}</span>
               <span class="option-text">{{ option.option_text }}</span>
@@ -88,6 +91,9 @@
                 极速加载
               </span>
             </button>
+          </div>
+          <div class="branch-tip" v-if="isSelectingBranch">
+            正在切换剧情...
           </div>
         </div>
       </transition>
@@ -103,9 +109,9 @@
       </div>
 
       <transition name="fade">
-        <div class="loading-overlay" v-if="isLoading">
+        <div class="loading-overlay" v-if="isLoading || isSwitching">
           <div class="loading-spinner"></div>
-          <span class="loading-text">加载中...</span>
+          <span class="loading-text">{{ isSwitching ? '切换中...' : '加载中...' }}</span>
         </div>
       </transition>
     </div>
@@ -148,11 +154,18 @@ const isPlaying = ref(false)
 const showControls = ref(true)
 const showBranchOptions = ref(false)
 const triggeredTimestamps = ref(new Set())
-const controlsTimer = ref(null)
+const isSwitching = ref(false)
+const lastBranchClickTime = ref(0)
+const currentSrc = ref('')
+
+const BRANCH_CLICK_DEBOUNCE = 1500
 
 const branchOptions = computed(() => dramaStore.branchOptions)
+const isSelectingBranch = computed(() => dramaStore.isSelectingBranch || isSwitching.value)
 
-const currentVideoUrl = computed(() => props.videoUrl || dramaStore.currentNode?.video_url || '')
+const currentVideoUrl = computed(() => {
+  return props.videoUrl || dramaStore.currentNode?.video_url || ''
+})
 
 const isEnding = computed(() => props.currentNode?.is_ending || dramaStore.currentNode?.is_ending || false)
 
@@ -177,9 +190,11 @@ function formatTime(seconds) {
 }
 
 function togglePlay() {
-  if (!videoEl.value) return
+  if (!videoEl.value || isSwitching.value) return
   if (videoEl.value.paused) {
-    videoEl.value.play()
+    videoEl.value.play().catch(err => {
+      console.warn('播放失败:', err)
+    })
   } else {
     videoEl.value.pause()
   }
@@ -202,8 +217,13 @@ function onLoadedMetadata() {
   duration.value = videoEl.value.duration || 0
 }
 
+function onVideoError() {
+  console.error('视频加载错误')
+  isPlaying.value = false
+}
+
 function onTimeUpdate() {
-  if (!videoEl.value) return
+  if (!videoEl.value || isSwitching.value) return
   
   currentTime.value = videoEl.value.currentTime
   emit('time-update', currentTime.value)
@@ -213,66 +233,150 @@ function onTimeUpdate() {
     bufferedPercent.value = (bufferedEnd / duration.value) * 100
   }
   
-  checkTimestamps(currentTime.value)
+  if (!showBranchOptions.value && !isSwitching.value) {
+    checkTimestamps(currentTime.value)
+  }
 }
 
 function checkTimestamps(time) {
   props.timestamps.forEach((ts) => {
-    if (time >= ts - 0.5 && time <= ts + 0.5 && !triggeredTimestamps.value.has(ts)) {
+    if (time >= ts - 0.3 && time <= ts + 0.5 && !triggeredTimestamps.value.has(ts)) {
       triggeredTimestamps.value.add(ts)
       triggerBranchOptions(ts)
     }
   })
 }
 
+let isFetchingOptions = false
+
 async function triggerBranchOptions(timestamp) {
+  if (isFetchingOptions || showBranchOptions.value) return
+  
   const nodeId = props.currentNode?.id || dramaStore.currentNodeId
   
   if (!nodeId) return
   
+  isFetchingOptions = true
   emit('branch-trigger', timestamp)
   
   try {
     await dramaStore.fetchBranchOptions(nodeId, timestamp)
     
-    if (dramaStore.branchOptions.length > 0) {
+    if (dramaStore.branchOptions.length > 0 && !isSwitching.value) {
       showBranchOptions.value = true
       if (videoEl.value) {
         videoEl.value.pause()
       }
     }
   } catch (err) {
-    console.error('触发分支选项失败:', err)
+    if (!err.isCancel && !err.isDebounced) {
+      console.error('触发分支选项失败:', err)
+    }
+  } finally {
+    isFetchingOptions = false
   }
 }
 
-async function selectBranch(option) {
-  showBranchOptions.value = false
+async function handleSelectBranch(option) {
+  const now = Date.now()
   
-  const preloadedVideo = dramaStore.getPreloadedVideo(option.to_node_id)
+  if (isSelectingBranch.value || isSwitching.value) {
+    console.warn('[DramaPlayer] 正在切换中，忽略点击')
+    return
+  }
   
-  emit('select-branch', option)
+  if (now - lastBranchClickTime.value < BRANCH_CLICK_DEBOUNCE) {
+    console.warn('[DramaPlayer] 点击太频繁，已防抖')
+    return
+  }
+  
+  lastBranchClickTime.value = now
+  isSwitching.value = true
   
   try {
-    await dramaStore.selectBranch(option)
+    await safeSwitchVideo(option)
+  } catch (err) {
+    console.error('切换分支失败:', err)
+  } finally {
+    setTimeout(() => {
+      isSwitching.value = false
+    }, 500)
+  }
+}
+
+async function safeSwitchVideo(option) {
+  if (!videoEl.value) {
+    await doSelectBranch(option)
+    return
+  }
+  
+  try {
+    videoEl.value.pause()
+  } catch (e) {}
+  
+  try {
+    videoEl.value.muted = true
+  } catch (e) {}
+  
+  showBranchOptions.value = false
+  
+  const oldSrc = videoEl.value.src
+  
+  try {
+    await doSelectBranch(option)
     
     await nextTick()
     
-    if (preloadedVideo && videoEl.value) {
-      videoEl.value.src = option.video_url
+    if (videoEl.value && currentVideoUrl.value && currentVideoUrl.value !== oldSrc) {
+      videoEl.value.src = currentVideoUrl.value
+      
       videoEl.value.load()
       
-      videoEl.value.play().catch(err => {
-        console.warn('自动播放失败:', err)
-      })
+      videoEl.value.addEventListener('loadeddata', onVideoLoadedForSwitch, { once: true })
+      
+      const playPromise = videoEl.value.play()
+      if (playPromise && playPromise.catch) {
+        playPromise.catch(err => {
+          console.warn('自动播放失败，等待用户交互:', err)
+        })
+      }
     }
     
-    triggeredTimestamps.value.clear()
+    cleanupOldVideoSource()
     
+    triggeredTimestamps.value.clear()
     currentTime.value = 0
+    
   } catch (err) {
-    console.error('切换分支失败:', err)
+    console.error('视频切换失败:', err)
+    throw err
   }
+}
+
+function onVideoLoadedForSwitch() {
+  if (videoEl.value) {
+    try {
+      videoEl.value.muted = false
+    } catch (e) {}
+  }
+}
+
+function cleanupOldVideoSource() {
+  dramaStore.cleanupOldPreloadedVideos(dramaStore.currentNodeId)
+}
+
+async function doSelectBranch(option) {
+  emit('select-branch', option)
+  
+  const result = await dramaStore.selectBranch(option)
+  
+  if (result && result.skipped) {
+    console.log('[DramaPlayer] 分支选择被跳过:', result.reason)
+    isSwitching.value = false
+    showBranchOptions.value = false
+  }
+  
+  return result
 }
 
 function onEnded() {
@@ -285,7 +389,7 @@ function onSeeking() {
 }
 
 function seekTo(event) {
-  if (!videoEl.value || !duration.value) return
+  if (!videoEl.value || !duration.value || isSwitching.value) return
   
   const rect = event.currentTarget.getBoundingClientRect()
   const percent = (event.clientX - rect.left) / rect.width
@@ -309,7 +413,7 @@ function toggleFullscreen() {
 function resetControlsTimer() {
   showControls.value = true
   clearTimeout(hideControlsTimeout)
-  if (isPlaying.value) {
+  if (isPlaying.value && !showBranchOptions.value) {
     hideControlsTimeout = setTimeout(() => {
       if (isPlaying.value && !showBranchOptions.value) {
         showControls.value = false
@@ -323,15 +427,22 @@ function onMouseMove() {
 }
 
 watch(() => props.videoUrl, (newUrl) => {
-  if (newUrl && videoEl.value) {
+  if (newUrl && videoEl.value && newUrl !== currentSrc.value) {
+    currentSrc.value = newUrl
     triggeredTimestamps.value.clear()
     currentTime.value = 0
-    videoEl.value.load()
   }
 })
 
 watch(() => props.currentNode, (newNode) => {
   if (newNode) {
+    triggeredTimestamps.value.clear()
+    showBranchOptions.value = false
+  }
+})
+
+watch(() => dramaStore.currentNodeId, (newId, oldId) => {
+  if (newId && newId !== oldId) {
     triggeredTimestamps.value.clear()
     showBranchOptions.value = false
   }
@@ -348,6 +459,13 @@ onUnmounted(() => {
   if (playerContainer.value) {
     playerContainer.value.removeEventListener('mousemove', onMouseMove)
   }
+  if (videoEl.value) {
+    try {
+      videoEl.value.pause()
+      videoEl.value.src = ''
+      videoEl.value.load()
+    } catch (e) {}
+  }
 })
 
 defineExpose({
@@ -355,6 +473,11 @@ defineExpose({
   pause: () => videoEl.value?.pause(),
   seek: (time) => { if (videoEl.value) videoEl.value.currentTime = time },
   videoElement: videoEl,
+  reset: () => {
+    triggeredTimestamps.value.clear()
+    showBranchOptions.value = false
+    isSwitching.value = false
+  },
 })
 </script>
 
@@ -513,8 +636,13 @@ defineExpose({
   transition: opacity 0.2s ease;
 }
 
-.ctrl-btn:hover {
+.ctrl-btn:hover:not(:disabled) {
   opacity: 0.8;
+}
+
+.ctrl-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .ctrl-btn svg {
@@ -600,18 +728,25 @@ defineExpose({
   transition: opacity 0.3s ease;
 }
 
-.branch-btn:hover {
+.branch-btn:hover:not(:disabled):not(.is-disabled) {
   transform: translateY(-3px) scale(1.02);
   border-color: rgba(255, 255, 255, 0.6);
   box-shadow: 0 8px 32px rgba(102, 126, 234, 0.5);
 }
 
-.branch-btn:hover::before {
+.branch-btn:hover:not(:disabled):not(.is-disabled)::before {
   opacity: 1;
 }
 
-.branch-btn:active {
+.branch-btn:active:not(:disabled):not(.is-disabled) {
   transform: translateY(-1px) scale(1.01);
+}
+
+.branch-btn:disabled,
+.branch-btn.is-disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
 }
 
 .option-label {
@@ -649,6 +784,12 @@ defineExpose({
   background: #4caf50;
   border-radius: 50%;
   animation: pulse 2s ease-in-out infinite;
+}
+
+.branch-tip {
+  margin-top: 16px;
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.7);
 }
 
 @keyframes pulse {
